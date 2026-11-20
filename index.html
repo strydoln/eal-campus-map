@@ -352,7 +352,7 @@ function updateGuide(){
     var b2=bearing(lastPos,to);
     if(guideLine)guideLine.setLatLngs([lastPos,to]);else guideLine=L.polyline([lastPos,to],{color:'#ffd400',weight:4,dashArray:'6 8'}).addTo(map);
     $('gDist').textContent=fmtD(d);
-    $('gTxt').textContent='to '+target.n+'. '+target.name+' \u2014 head '+compass(b2)+' (straight line, no road route found)';
+    $('gTxt').textContent='to '+target.n+'. '+target.name+' \u2014 head '+compass(b2)+' (straight line)';
     $('gArr').textContent='\u27A4';$('gArr').style.transform='rotate('+(b2-90)+'deg)';
   }
 }
@@ -434,19 +434,20 @@ function buildGraph(){
   graph={nodes:nodes,adj:adj,edges:edges};
   glowRefresh();
 }
-function snapGraph(pt){
-  var p=toM(pt),best=null;
+function snapGraph(pt,K){
+  var p=toM(pt),c=[],out=[],i;
   graph.edges.forEach(function(e,ei){
     var a=toM(graph.nodes[e.u]),b=toM(graph.nodes[e.v]),dx=b[0]-a[0],dy=b[1]-a[1],L2=dx*dx+dy*dy||1e-9;
     var t=Math.max(0,Math.min(1,((p[0]-a[0])*dx+(p[1]-a[1])*dy)/L2)),qx=a[0]+dx*t,qy=a[1]+dy*t,d=Math.hypot(p[0]-qx,p[1]-qy);
-    if(!best||d<best.d){var A=graph.nodes[e.u],B=graph.nodes[e.v];best={d:d,t:t,e:ei,pt:[A[0]+(B[0]-A[0])*t,A[1]+(B[1]-A[1])*t]}}
+    var A=graph.nodes[e.u],B=graph.nodes[e.v];
+    c.push({d:d,t:t,e:ei,pt:[A[0]+(B[0]-A[0])*t,A[1]+(B[1]-A[1])*t]});
   });
-  return best;
+  c.sort(function(x,y){return x.d-y.d});
+  for(i=0;i<c.length&&out.length<K;i++){var x=c[i];if(out.every(function(o){return dist(o.pt,x.pt)>3}))out.push(x)}
+  return out;
 }
-function findRoutes(from,to){
-  if(!graph||!graph.edges.length)return null;
-  var s=snapGraph(from),e=snapGraph(to);
-  if(!s||!e||s.d>80||e.d>80)return null;
+/* route between two snapped road points (s, e); from/to are the real positions, joined to the road by a straight connector */
+function routeBetween(s,e,from,to,maxOut){
   var nodes=graph.nodes.slice(),adj=graph.adj.map(function(a){return a.slice()});
   function addV(sn){
     var id=nodes.length,ed=graph.edges[sn.e];nodes.push(sn.pt);adj.push([]);
@@ -470,7 +471,7 @@ function findRoutes(from,to){
   function plen(path){var L2=0,i;for(i=0;i<path.length-1;i++){L2+=dist(nodes[path[i]],nodes[path[i+1]])}return L2}
   function keys(path){var o={},i;for(i=0;i<path.length-1;i++){o[ekey(path[i],path[i+1])]=dist(nodes[path[i]],nodes[path[i+1]])}return o}
   var best=null;
-  for(var tries=0;tries<6&&out.length<3;tries++){
+  for(var tries=0;tries<6&&out.length<maxOut;tries++){
     var path=dijkstra();if(!path)break;
     var len=plen(path),k=keys(path);
     if(!best)best=len;
@@ -486,6 +487,20 @@ function findRoutes(from,to){
     if(s.d>3)c.unshift(from);if(e.d>3)c.push(to);
     return {coords:c,len:r.len+(s.d>3?s.d:0)+(e.d>3?e.d:0)};
   });
+}
+/* the visitor and the destination are always joined to the nearest road, so a point off the road still gets a route */
+function findRoutes(from,to){
+  if(!graph||!graph.edges.length)return null;
+  var ss=snapGraph(from,5),es=snapGraph(to,5);
+  if(!ss.length||!es.length)return null;
+  if(ss[0].d>800)return null;   // visitor is nowhere near the campus roads: show the straight line instead
+  var bestPair=null,bestCost=Infinity;
+  ss.forEach(function(s){es.forEach(function(e){
+    var r=routeBetween(s,e,from,to,1);
+    if(r&&r[0].len<bestCost){bestCost=r[0].len;bestPair=[s,e]}
+  })});
+  if(!bestPair)return null;
+  return routeBetween(bestPair[0],bestPair[1],from,to,3);
 }
 var parkMode=false,parkLayer=L.layerGroup().addTo(map),parkPolys=[];
 function centroid(poly){var a=0,b=0;poly.forEach(function(q){a+=q[0];b+=q[1]});return [a/poly.length,b/poly.length]}
