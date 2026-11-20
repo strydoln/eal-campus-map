@@ -54,7 +54,7 @@ dialog .row{display:flex;gap:8px;margin-top:14px;justify-content:flex-end}
  .ctrl,.scs-badge,.leaflet-control-zoom,.vtx,.mid{display:none!important}
  #printhead{display:block;padding:0 0 6px}
  #printhead h2{margin:0;font-size:18px}
- #map{position:relative;height:150mm;width:100%;border:1px solid #000}
+ #map{position:relative!important;inset:auto!important;height:567px;width:1047px;border:1px solid #000}
  #printlist{display:block!important;columns:2;font-size:12px;margin-top:8px;padding:0;list-style:none}
  #printlist li{break-inside:avoid;margin-bottom:4px;display:flex;gap:6px}
  #printlist .num{background:#000;color:#fff;border:0;box-shadow:none;-webkit-print-color-adjust:exact;print-color-adjust:exact}
@@ -62,6 +62,7 @@ dialog .row{display:flex;gap:8px;margin-top:14px;justify-content:flex-end}
  @page{size:A4 landscape;margin:10mm}
 }
 #printlist{display:none}
+body.printing #map{position:fixed;inset:auto;left:0;top:0;width:1047px;height:567px;z-index:5000}
 </style>
 </head>
 <body>
@@ -103,6 +104,12 @@ dialog .row{display:flex;gap:8px;margin-top:14px;justify-content:flex-end}
     <label>Note (optional)</label><textarea id="fNote" rows="2" maxlength="200"></textarea>
     <div class="row"><button type="button" class="btn" id="fCancel">Cancel</button><button class="btn on" id="fOk" value="ok">Save</button></div>
   </form>
+</dialog>
+<dialog id="pdlg">
+  <b>Make a PDF of this map</b>
+  <p style="font-size:14px;line-height:1.4;margin:10px 0 0">The PDF shows <b>exactly the area on your screen right now</b> (landscape page), with the numbered points listed underneath.</p>
+  <p style="font-size:14px;line-height:1.4;margin:8px 0 0">&#9888; Pan and zoom the map first so everything you want is visible, then press Continue. In the print window choose <b>Save as PDF</b>, and switch on <b>Background graphics</b> if the colours are missing.</p>
+  <div class="row"><button class="btn" id="pCancel">Cancel</button><button class="btn on" id="pGo">Continue</button></div>
 </dialog>
 <input type="file" id="file" accept="application/json" style="display:none">
 <div class="scs-badge" title="Smart Campus Software · leslie.strydom@eskom.co.za">SCS</div>
@@ -148,7 +155,7 @@ function compass(b){return DIRS[Math.round(b/45)%8]}
 
 /* ---- map ---- */
 var map=L.map('map',{zoomControl:true,minZoom:14,maxZoom:20,tap:true});
-L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+var tiles=L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
   {maxZoom:20,maxNativeZoom:19,attribution:'Imagery &copy; Esri, Maxar, Earthstar Geographics'}).addTo(map);
 var bLayer=L.layerGroup().addTo(map),borderLayer=L.layerGroup().addTo(map),editLayer=L.layerGroup().addTo(map),poiLayer=L.layerGroup().addTo(map);
 var meMarker=null,meCircle=null,guideLine=null,watchId=null,target=null,lastPos=null;
@@ -314,9 +321,26 @@ if(EDIT){
 /* ---- panel + print ---- */
 $('pHead').onclick=function(){var p=$('panel');p.classList.toggle('min');$('pTog').innerHTML=p.classList.contains('min')?'&#9650;':'&#9660;'};
 if(window.innerWidth<760){$('panel').classList.add('min');$('pTog').innerHTML='&#9650;'}
-$('bPrint').onclick=function(){map.closePopup();window.print()};
-window.addEventListener('beforeprint',function(){map.invalidateSize();map.fitBounds(L.latLngBounds(state.border).pad(.06),{animate:false})});
-window.addEventListener('afterprint',function(){map.invalidateSize()});
+$('bPrint').onclick=function(){map.closePopup();$('pdlg').showModal()};
+$('pCancel').onclick=function(){$('pdlg').close()};
+$('pGo').onclick=function(){$('pdlg').close();preparePrint()};
+var printing=false;
+function preparePrint(){
+  if(printing)return;printing=true;
+  var b=map.getBounds();
+  document.body.classList.add('printing');
+  map.invalidateSize({animate:false});
+  map.fitBounds(b,{animate:false});
+  msg('Preparing the map for the PDF...');
+  var done=false;
+  function go(){if(done)return;done=true;$('msg').style.display='none';setTimeout(function(){window.print()},200)}
+  tiles.once('load',go);
+  setTimeout(go,4000); // fall back if no tile event arrives
+}
+window.addEventListener('afterprint',function(){
+  if(!printing)return;printing=false;
+  var b=map.getBounds();document.body.classList.remove('printing');map.invalidateSize({animate:false});map.fitBounds(b,{animate:false});
+});
 
 boot();
 })();
