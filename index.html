@@ -63,6 +63,14 @@ dialog .row{display:flex;gap:8px;margin-top:14px;justify-content:flex-end}
 }
 #printlist{display:none}
 body.printing #map{position:fixed;inset:auto;left:0;top:0;width:1047px;height:567px;z-index:5000}
+#guide{flex-wrap:wrap}
+@media(max-width:759px){#guide{top:auto;bottom:66px}}
+#routes{width:100%;display:flex;gap:6px;flex-wrap:wrap}
+.chip{border:2px solid var(--c,#00e5ff);background:rgba(255,255,255,.06);color:#e8f1f8;border-radius:16px;padding:6px 11px;font-size:13px;font-weight:600;cursor:pointer}
+.chip.sel{background:var(--c,#00e5ff);color:#04202a}
+#rbar{top:112px;left:10px;display:none;gap:6px;flex-wrap:wrap}
+@media(max-width:759px){#rbar{top:150px}}
+.num.p{background:#7986cb;color:#fff}
 </style>
 </head>
 <body>
@@ -76,6 +84,8 @@ body.printing #map{position:fixed;inset:auto;left:0;top:0;width:1047px;height:56
   <span id="editBtns" style="display:none;gap:6px;flex-wrap:wrap">
     <button class="btn" id="bAdd">+ Add point</button>
     <button class="btn" id="bBorder">Edit border</button>
+    <button class="btn" id="bRoads">Draw roads</button>
+    <button class="btn" id="bPark">Draw parking</button>
     <button class="btn" id="bExport">Export</button>
     <button class="btn" id="bImport">Import</button>
     <button class="btn" id="bClear">Clear all</button>
@@ -86,6 +96,12 @@ body.printing #map{position:fixed;inset:auto;left:0;top:0;width:1047px;height:56
   <div class="arr" id="gArr">&#10148;</div>
   <div><div class="d" id="gDist">-</div><small id="gTxt"></small></div>
   <button class="btn" id="gStop">Stop</button>
+  <div id="routes"></div>
+</div>
+<div id="rbar" class="ctrl">
+  <button class="btn on" id="rFinish">Finish line</button>
+  <button class="btn" id="rUndo">Undo point</button>
+  <button class="btn" id="rCancel">Cancel line</button>
 </div>
 <div id="msg" class="ctrl"></div>
 
@@ -122,7 +138,7 @@ var BUILDINGS = [{"name":"Artisan Workshop","color":"#00b8d4","polygon":[[-25.98
 var EDIT = new URLSearchParams(location.search).get('edit') === '1';
 var LS = 'eal-visitor-map-v1';
 var $ = function(id){return document.getElementById(id)};
-var state = {pois:[], border:null};
+var state = {pois:[], border:null, roads:[], parking:[]};
 var nextId = 1;
 
 /* ---- helpers ---- */
@@ -190,7 +206,7 @@ function numIcon(n,sel){return L.divIcon({className:'',html:'<div class="num pin
 function renumber(){state.pois.forEach(function(p,i){p.n=i+1})}
 function popupHtml(p){
   var h='<div class="popup"><b>'+p.n+'. '+esc(p.name)+'</b><p>'+esc(p.cat)+(p.note?' &mdash; '+esc(p.note):'')+'</p>'+
-    '<button data-a="go" data-id="'+p.id+'">Guide me here</button>';
+    '<button data-a="go" data-id="'+p.id+'">Navigate here</button>';
   if(EDIT)h+='<button class="sec" data-a="edit" data-id="'+p.id+'">Edit</button><button class="sec" data-a="del" data-id="'+p.id+'">Delete</button>';
   return h+'</div>';
 }
@@ -210,10 +226,21 @@ function render(){
     var pi=document.createElement('li');pi.innerHTML='<span class="num">'+p.n+'</span><div><b>'+esc(p.name)+'</b><br>'+esc(p.cat)+(p.note?' &mdash; '+esc(p.note):'')+'</div>';
     pl.appendChild(pi);
   });
-  if(!state.pois.length)ul.innerHTML='<li style="cursor:default;opacity:.7">'+(EDIT?'No points yet. Tap "+ Add point", then tap the map.':'No points have been added yet.')+'</li>';
+  state.parking.forEach(function(pk,i){
+    var li=document.createElement('li');if(target&&target.id==='pk'+i)li.className='sel';
+    li.innerHTML='<span class="num p">P</span><div><div class="t">'+esc(pk.name)+'</div><div class="s">Parking</div></div>';
+    li.onclick=function(){map.fitBounds(L.latLngBounds(pk.polygon),{maxZoom:19,animate:false});if(parkPolys[i])parkPolys[i].openPopup(centroid(pk.polygon))};
+    ul.appendChild(li);
+    var pi=document.createElement('li');pi.innerHTML='<span class="num p">P</span><div><b>'+esc(pk.name)+'</b><br>Parking</div>';pl.appendChild(pi);
+  });
+  if(!state.pois.length&&!state.parking.length)ul.innerHTML='<li style="cursor:default;opacity:.7">'+(EDIT?'No points yet. Tap "+ Add point", then tap the map.':'No points have been added yet.')+'</li>';
 }
 document.addEventListener('click',function(e){
   var b=e.target.closest&&e.target.closest('button[data-a]');if(!b)return;
+  if(b.dataset.a==='gopark'){var pk=state.parking[+b.dataset.id];if(pk){map.closePopup();setTarget(parkTarget(+b.dataset.id))}return}
+  if(b.dataset.a==='renpark'){var pr=state.parking[+b.dataset.id];if(pr){var nn=prompt('Name of this parking area',pr.name);if(nn&&nn.trim()){pr.name=nn.trim().slice(0,60);map.closePopup();save();drawParking();render()}}return}
+  if(b.dataset.a==='delpark'){if(confirm('Delete this parking area?')){state.parking.splice(+b.dataset.id,1);map.closePopup();save();drawParking();render()}return}
+  if(b.dataset.a==='delroad'){var ri=+b.dataset.id;if(confirm('Delete this road line?')){state.roads.splice(ri,1);map.closePopup();save();drawRoads();buildGraph()}return}
   var p=state.pois.find(function(x){return String(x.id)===b.dataset.id});if(!p)return;
   if(b.dataset.a==='go'){map.closePopup();setTarget(p)}
   if(b.dataset.a==='edit'){map.closePopup();openDlg(p)}
@@ -236,13 +263,17 @@ $('dlgForm').addEventListener('submit',function(){
   editing=null;pending=null;save();render();
 });
 map.on('click',function(e){if(EDIT&&adding){setAdding(false);openDlg(null,e.latlng)}});
-function setAdding(v){adding=v;$('bAdd').classList.toggle('on',v);$('map').style.cursor=v?'crosshair':'';if(v)msg('Tap the map where the point should go.',4000)}
+function setAdding(v){if(v&&roadMode)setRoadMode(false);if(v&&parkMode)setParkMode(false);adding=v;$('bAdd').classList.toggle('on',v);$('map').style.cursor=v?'crosshair':'';if(v)msg('Tap the map where the point should go.',4000)}
 
 /* ---- guide / location ---- */
+var needCalc=true;
 function setTarget(p){
-  target=p;render();
-  if(!p){$('guide').style.display='none';if(guideLine){map.removeLayer(guideLine);guideLine=null}return}
-  if(!watchId)startLocate();else updateGuide();
+  target=p;needCalc=true;lastCalc=null;routes=[];selRoute=0;render();routeLayer.clearLayers();
+  if(guideLine){map.removeLayer(guideLine);guideLine=null}
+  if(!p){$('guide').style.display='none';$('routes').innerHTML='';return}
+  $('panel').classList.add('min');$('pTog').innerHTML='&#9650;';
+  if(!watchId)startLocate();
+  updateGuide();
 }
 function startLocate(){
   if(!navigator.geolocation){msg('This browser cannot give a location.',6000);return}
@@ -267,28 +298,231 @@ function stopLocate(){
   if(meMarker){map.removeLayer(meMarker);map.removeLayer(meCircle);meMarker=meCircle=null}
   lastPos=null;if(target)setTarget(null);
 }
+var RC=['#00e5ff','#ff9800','#e040fb','#76ff03'];
+function fmtD(d){return d<1000?Math.round(d)+' m':(d/1000).toFixed(1)+' km'}
+function mins(d){return Math.max(1,Math.round(d/80))+' min'}
+function drawRoutes(){
+  routeLayer.clearLayers();
+  var order=routes.map(function(r,i){return i}).filter(function(i){return i!==selRoute});order.push(selRoute);
+  order.forEach(function(i){
+    var r=routes[i];if(!r)return;var sel=i===selRoute;
+    L.polyline(r.coords,{color:'#fff',weight:sel?10:7,opacity:sel?.9:.55,interactive:false}).addTo(routeLayer);
+    L.polyline(r.coords,{color:RC[i%RC.length],weight:sel?6:4,opacity:1,dashArray:sel?null:'8 8',interactive:false}).addTo(routeLayer);
+  });
+}
+function renderChips(){
+  var box=$('routes');box.innerHTML='';
+  if(routes.length<2){return}
+  routes.forEach(function(r,i){
+    var c=document.createElement('button');c.className='chip'+(i===selRoute?' sel':'');c.style.setProperty('--c',RC[i%RC.length]);
+    c.textContent=(i===0?'Shortest':'Option '+(i+1))+' \u00b7 '+fmtD(r.len)+' \u00b7 '+mins(r.len);
+    c.onclick=function(){selRoute=i;drawRoutes();renderChips();updateGuide()};
+    box.appendChild(c);
+  });
+}
 function updateGuide(){
-  if(!target||!lastPos)return;
-  var to=[target.lat,target.lng],d=dist(lastPos,to),b=bearing(lastPos,to);
+  if(!target)return;
   $('guide').style.display='flex';
-  if(guideLine)guideLine.setLatLngs([lastPos,to]);else guideLine=L.polyline([lastPos,to],{color:'#ffd400',weight:4,dashArray:'6 8'}).addTo(map);
-  if(d<15){$('gDist').textContent='You have arrived';$('gTxt').textContent=target.n+'. '+target.name;$('gArr').textContent='✔';$('gArr').style.transform=''}
-  else{$('gDist').textContent=(d<1000?Math.round(d)+' m':(d/1000).toFixed(1)+' km');
-    $('gTxt').textContent='to '+target.n+'. '+target.name+' — head '+compass(b)+' (straight line)';
-    $('gArr').textContent='➤';$('gArr').style.transform='rotate('+(b-90)+'deg)'}
+  if(!lastPos){$('gDist').textContent='Finding you...';$('gTxt').textContent='to '+target.n+'. '+target.name;$('gArr').textContent='\u27A4';$('gArr').style.transform='';return}
+  var to=[target.lat,target.lng],d=dist(lastPos,to);
+  if(d<15){
+    routeLayer.clearLayers();$('routes').innerHTML='';if(guideLine){map.removeLayer(guideLine);guideLine=null}
+    $('gDist').textContent='You have arrived';$('gTxt').textContent=target.n+'. '+target.name;$('gArr').textContent='\u2714';$('gArr').style.transform='';return;
+  }
+  if(needCalc||!lastCalc||dist(lastCalc,lastPos)>8){
+    needCalc=false;lastCalc=lastPos.slice();
+    routes=findRoutes(lastPos,to)||[];if(selRoute>=routes.length)selRoute=0;
+    drawRoutes();renderChips();
+  }
+  if(routes.length){
+    if(guideLine){map.removeLayer(guideLine);guideLine=null}
+    var r=routes[selRoute],aim=r.coords[r.coords.length-1];
+    for(var k=0;k<r.coords.length;k++){if(dist(lastPos,r.coords[k])>=20){aim=r.coords[k];break}}
+    var b=bearing(lastPos,aim);
+    $('gDist').textContent=fmtD(r.len)+' \u00b7 '+mins(r.len);
+    $('gTxt').textContent='to '+target.n+'. '+target.name+(routes.length>1?' \u2014 tap an option below':' \u2014 follow the line');
+    $('gArr').textContent='\u27A4';$('gArr').style.transform='rotate('+(b-90)+'deg)';
+  }else{
+    var b2=bearing(lastPos,to);
+    if(guideLine)guideLine.setLatLngs([lastPos,to]);else guideLine=L.polyline([lastPos,to],{color:'#ffd400',weight:4,dashArray:'6 8'}).addTo(map);
+    $('gDist').textContent=fmtD(d);
+    $('gTxt').textContent='to '+target.n+'. '+target.name+' \u2014 head '+compass(b2)+' (straight line, no road route found)';
+    $('gArr').textContent='\u27A4';$('gArr').style.transform='rotate('+(b2-90)+'deg)';
+  }
 }
 $('bFind').onclick=function(){watchId?stopLocate():startLocate()};
 $('gStop').onclick=function(){setTarget(null)};
 
+/* ---- roads + routing ---- */
+var roadLayer=L.layerGroup().addTo(map),routeLayer=L.layerGroup().addTo(map),draftLayer=L.layerGroup().addTo(map);
+var roadMode=false,draft=[],graph=null,routes=[],selRoute=0,lastCalc=null;
+var K=111320,C0=Math.cos(-25.985*Math.PI/180);
+function toM(p){return [p[1]*K*C0,p[0]*K]}
+function drawRoads(){
+  roadLayer.clearLayers();
+  if(!EDIT)return;
+  state.roads.forEach(function(r,i){
+    var pl=L.polyline(r,{color:'#ff9800',weight:5,opacity:.9,interactive:!roadMode}).addTo(roadLayer);
+    if(!roadMode)pl.bindPopup('<div class="popup"><b>Road line '+(i+1)+'</b><p>'+r.length+' points</p><button class="sec" data-a="delroad" data-id="'+i+'">Delete line</button></div>');
+  });
+}
+function drawDraft(){
+  draftLayer.clearLayers();if(!draft.length)return;
+  if(parkMode&&draft.length>2)L.polygon(draft,{color:'#9fa8da',weight:2,fillColor:'#5c6bc0',fillOpacity:.35,interactive:false}).addTo(draftLayer);
+  L.polyline(draft,{color:'#ffd400',weight:4,dashArray:'6 6',interactive:false}).addTo(draftLayer);
+  draft.forEach(function(p){L.circleMarker(p,{radius:5,color:'#000',weight:2,fillColor:'#ffd400',fillOpacity:1,interactive:false}).addTo(draftLayer)});
+}
+function snapRoad(latlng){
+  var pt=map.latLngToLayerPoint(latlng),best=null,bd=14,all=state.roads.concat(draft.length?[draft]:[]);
+  all.forEach(function(r){r.forEach(function(v){var d=pt.distanceTo(map.latLngToLayerPoint(v));if(d<bd){bd=d;best={pt:v}}})});
+  if(best)return best.pt.slice();
+  bd=14;
+  state.roads.forEach(function(r,ri){for(var i=0;i<r.length-1;i++){
+    var q=L.LineUtil.closestPointOnSegment(pt,map.latLngToLayerPoint(r[i]),map.latLngToLayerPoint(r[i+1])),d=pt.distanceTo(q);
+    if(d<bd){bd=d;var ll=map.layerPointToLatLng(q);best={pt:[ll.lat,ll.lng],ri:ri,si:i}}}});
+  if(best&&best.ri!=null)state.roads[best.ri].splice(best.si+1,0,best.pt);
+  return best?best.pt.slice():[latlng.lat,latlng.lng];
+}
+map.on('click',function(e){
+  if(!(EDIT&&(roadMode||parkMode)))return;
+  var p=roadMode?snapRoad(e.latlng):[e.latlng.lat,e.latlng.lng],l=draft[draft.length-1];
+  if(l&&l[0]===p[0]&&l[1]===p[1])return;
+  draft.push(p);drawDraft();
+});
+function setRoadMode(v){
+  roadMode=v;draft=[];drawDraft();
+  $('bRoads').classList.toggle('on',v);$('rbar').style.display=(v||parkMode)?'flex':'none';
+  $('map').style.cursor=v?'crosshair':'';
+  if(v){if(adding)setAdding(false);if(parkMode)setParkMode(false);msg('Tap along a road to add points. Tap near an existing road to join it. Press "Finish line" after each road.',8000)}
+  drawRoads();
+}
+function finishLine(){
+  if(draft.length>=2){state.roads.push(draft.map(function(p){return p.slice()}));save();buildGraph()}
+  else if(draft.length)msg('A road line needs at least 2 points.',3000);
+  draft=[];drawDraft();drawRoads();
+}
+function buildGraph(){
+  var segs=[],i,j;
+  state.roads.forEach(function(r){for(i=0;i<r.length-1;i++){if(r[i][0]!==r[i+1][0]||r[i][1]!==r[i+1][1])segs.push([r[i],r[i+1]])}});
+  var cuts=segs.map(function(){return []});
+  for(i=0;i<segs.length;i++)for(j=i+1;j<segs.length;j++){
+    var a=toM(segs[i][0]),b=toM(segs[i][1]),c=toM(segs[j][0]),d=toM(segs[j][1]);
+    var rx=b[0]-a[0],ry=b[1]-a[1],sx=d[0]-c[0],sy=d[1]-c[1],den=rx*sy-ry*sx;
+    if(Math.abs(den)<1e-9)continue;
+    var qx=c[0]-a[0],qy=c[1]-a[1],t=(qx*sy-qy*sx)/den,u=(qx*ry-qy*rx)/den;
+    if(t<-1e-9||t>1+1e-9||u<-1e-9||u>1+1e-9)continue;
+    var pt=[segs[i][0][0]+(segs[i][1][0]-segs[i][0][0])*t,segs[i][0][1]+(segs[i][1][1]-segs[i][0][1])*t];
+    if(t>1e-6&&t<1-1e-6)cuts[i].push({t:t,pt:pt});
+    if(u>1e-6&&u<1-1e-6)cuts[j].push({t:u,pt:pt});
+  }
+  var nodes=[],adj=[],edges=[],idx={};
+  function nid(p){var k=p[0].toFixed(6)+','+p[1].toFixed(6);if(idx[k]==null){idx[k]=nodes.length;nodes.push(p);adj.push([])}return idx[k]}
+  segs.forEach(function(s,si){
+    var pts=[s[0]].concat(cuts[si].sort(function(x,y){return x.t-y.t}).map(function(c){return c.pt}),[s[1]]);
+    for(var k=0;k<pts.length-1;k++){
+      var u=nid(pts[k]),v=nid(pts[k+1]);if(u===v)continue;
+      var len=dist(nodes[u],nodes[v]);
+      adj[u].push({to:v,w:len});adj[v].push({to:u,w:len});edges.push({u:u,v:v,len:len});
+    }
+  });
+  graph={nodes:nodes,adj:adj,edges:edges};
+}
+function snapGraph(pt){
+  var p=toM(pt),best=null;
+  graph.edges.forEach(function(e,ei){
+    var a=toM(graph.nodes[e.u]),b=toM(graph.nodes[e.v]),dx=b[0]-a[0],dy=b[1]-a[1],L2=dx*dx+dy*dy||1e-9;
+    var t=Math.max(0,Math.min(1,((p[0]-a[0])*dx+(p[1]-a[1])*dy)/L2)),qx=a[0]+dx*t,qy=a[1]+dy*t,d=Math.hypot(p[0]-qx,p[1]-qy);
+    if(!best||d<best.d){var A=graph.nodes[e.u],B=graph.nodes[e.v];best={d:d,t:t,e:ei,pt:[A[0]+(B[0]-A[0])*t,A[1]+(B[1]-A[1])*t]}}
+  });
+  return best;
+}
+function findRoutes(from,to){
+  if(!graph||!graph.edges.length)return null;
+  var s=snapGraph(from),e=snapGraph(to);
+  if(!s||!e||s.d>80||e.d>80)return null;
+  var nodes=graph.nodes.slice(),adj=graph.adj.map(function(a){return a.slice()});
+  function addV(sn){
+    var id=nodes.length,ed=graph.edges[sn.e];nodes.push(sn.pt);adj.push([]);
+    adj[id].push({to:ed.u,w:sn.t*ed.len,vir:1},{to:ed.v,w:(1-sn.t)*ed.len,vir:1});
+    adj[ed.u].push({to:id,w:sn.t*ed.len,vir:1});adj[ed.v].push({to:id,w:(1-sn.t)*ed.len,vir:1});
+    return id;
+  }
+  var S=addV(s),E=addV(e);
+  if(s.e===e.e){var dd=Math.abs(s.t-e.t)*graph.edges[s.e].len;adj[S].push({to:E,w:dd,vir:1});adj[E].push({to:S,w:dd,vir:1})}
+  var pen={},out=[],ekey=function(a,b){return a<b?a+'-'+b:b+'-'+a};
+  function dijkstra(){
+    var n=nodes.length,dst=new Array(n).fill(Infinity),prv=new Array(n).fill(-1),done=new Array(n).fill(false);dst[S]=0;
+    for(var it=0;it<n;it++){
+      var u=-1,m=Infinity;for(var x=0;x<n;x++){if(!done[x]&&dst[x]<m){m=dst[x];u=x}}
+      if(u<0||u===E)break;done[u]=true;
+      adj[u].forEach(function(ed){var w=ed.w*(ed.vir?1:(1+(pen[ekey(u,ed.to)]||0))),nd=dst[u]+w;if(nd<dst[ed.to]){dst[ed.to]=nd;prv[ed.to]=u}});
+    }
+    if(dst[E]===Infinity)return null;
+    var path=[],c=E;while(c!==-1){path.push(c);c=prv[c]}return path.reverse();
+  }
+  function plen(path){var L2=0,i;for(i=0;i<path.length-1;i++){L2+=dist(nodes[path[i]],nodes[path[i+1]])}return L2}
+  function keys(path){var o={},i;for(i=0;i<path.length-1;i++){o[ekey(path[i],path[i+1])]=dist(nodes[path[i]],nodes[path[i+1]])}return o}
+  var best=null;
+  for(var tries=0;tries<6&&out.length<3;tries++){
+    var path=dijkstra();if(!path)break;
+    var len=plen(path),k=keys(path);
+    if(!best)best=len;
+    var ok=len<=best*1.8+60;
+    if(ok)out.forEach(function(r){var sh=0;for(var q in k){if(r.keys[q])sh+=k[q]}if(sh/len>.7)ok=false});
+    if(ok)out.push({coords:path.map(function(i){return nodes[i]}),len:len,keys:k});
+    for(var q in k)pen[q]=(pen[q]||0)+1.5;
+  }
+  if(!out.length)return null;
+  out.sort(function(a,b){return a.len-b.len});
+  return out.map(function(r){
+    var c=r.coords.slice();
+    if(s.d>3)c.unshift(from);if(e.d>3)c.push(to);
+    return {coords:c,len:r.len+(s.d>3?s.d:0)+(e.d>3?e.d:0)};
+  });
+}
+var parkMode=false,parkLayer=L.layerGroup().addTo(map),parkPolys=[];
+function centroid(poly){var a=0,b=0;poly.forEach(function(q){a+=q[0];b+=q[1]});return [a/poly.length,b/poly.length]}
+function parkTarget(i){var pk=state.parking[i],c=centroid(pk.polygon);return {id:'pk'+i,n:'P',name:pk.name,lat:c[0],lng:c[1]}}
+function drawParking(){
+  parkLayer.clearLayers();parkPolys=[];
+  state.parking.forEach(function(pk,i){
+    var poly=L.polygon(pk.polygon,{color:'#9fa8da',weight:2,fillColor:'#5c6bc0',fillOpacity:.4,interactive:!(roadMode||parkMode)}).addTo(parkLayer);
+    poly.bindTooltip('P \u00b7 '+pk.name,{permanent:true,direction:'center',className:'bld'});
+    var h='<div class="popup"><b>P. '+esc(pk.name)+'</b><p>Parking</p><button data-a="gopark" data-id="'+i+'">Navigate here</button>';
+    if(EDIT)h+='<button class="sec" data-a="renpark" data-id="'+i+'">Rename</button><button class="sec" data-a="delpark" data-id="'+i+'">Delete</button>';
+    poly.bindPopup(h+'</div>');
+    parkPolys[i]=poly;
+  });
+}
+function setParkMode(v){
+  parkMode=v;draft=[];drawDraft();
+  $('bPark').classList.toggle('on',v);$('rbar').style.display=(v||roadMode)?'flex':'none';
+  $('map').style.cursor=v?'crosshair':'';
+  if(v){if(adding)setAdding(false);if(roadMode)setRoadMode(false);$('rbar').style.display='flex';msg('Tap the corners of the parking area, then press "Finish line".',8000)}
+  drawParking();
+}
+function finishPark(){
+  if(draft.length>=3){
+    var nm=prompt('Name of this parking area (e.g. Visitor parking)','Parking');
+    if(nm&&nm.trim()){state.parking.push({name:nm.trim().slice(0,60),polygon:draft.map(function(q){return q.slice()})});save();render()}
+  }else if(draft.length)msg('A parking area needs at least 3 corners.',3000);
+  draft=[];drawDraft();drawParking();
+}
+$('rFinish').onclick=function(){parkMode?finishPark():finishLine()};
+$('rUndo').onclick=function(){draft.pop();drawDraft()};
+$('rCancel').onclick=function(){draft=[];drawDraft()};
+
 /* ---- storage ---- */
-function save(){if(!EDIT)return;try{localStorage.setItem(LS,JSON.stringify({pois:state.pois,border:state.border}))}catch(e){}}
+function save(){if(!EDIT)return;try{localStorage.setItem(LS,JSON.stringify({pois:state.pois,border:state.border,roads:state.roads,parking:state.parking}))}catch(e){}}
 function load(d){
   state.pois=(d&&d.pois||[]).map(function(p){return {id:p.id||0,name:String(p.name||''),cat:String(p.cat||'Other'),note:String(p.note||''),lat:+p.lat,lng:+p.lng}}).filter(function(p){return isFinite(p.lat)&&isFinite(p.lng)});
   state.pois.forEach(function(p,i){p.id=i+1});nextId=state.pois.length+1;
   state.border=(d&&d.border&&d.border.length>2)?d.border:defaultBorder();
+  state.parking=((d&&d.parking)||[]).filter(function(q){return q&&Array.isArray(q.polygon)&&q.polygon.length>2&&q.polygon.every(function(p){return Array.isArray(p)&&isFinite(p[0])&&isFinite(p[1])})}).map(function(q){return {name:String(q.name||'Parking').slice(0,60),polygon:q.polygon.map(function(p){return [+p[0],+p[1]]})}});
+  state.roads=((d&&d.roads)||[]).filter(function(r){return Array.isArray(r)&&r.length>1&&r.every(function(p){return Array.isArray(p)&&isFinite(p[0])&&isFinite(p[1])})}).map(function(r){return r.map(function(p){return [+p[0],+p[1]]})});
 }
 function init(d){
-  load(d);drawBorder(false);render();
+  load(d);drawBorder(false);render();drawRoads();buildGraph();drawParking();render();
   fitCampus();setTimeout(function(){map.invalidateSize();fitCampus()},400);
   window.addEventListener('load',function(){map.invalidateSize();fitCampus()});
 }
@@ -307,14 +541,16 @@ function boot(){
 if(EDIT){
   $('editBtns').style.display='flex';
   $('bAdd').onclick=function(){setAdding(!adding)};
+  $('bRoads').onclick=function(){setRoadMode(!roadMode)};
+  $('bPark').onclick=function(){setParkMode(!parkMode)};
   $('bBorder').onclick=function(){editBorder=!editBorder;$('bBorder').classList.toggle('on',editBorder);drawBorder(editBorder);if(editBorder)msg('Drag a yellow dot to move a corner. Drag a white dot to add a new corner. Double-tap a yellow dot to remove it.',6000)};
   $('bExport').onclick=function(){
-    var blob=new Blob([JSON.stringify({pois:state.pois,border:state.border},null,1)],{type:'application/json'});
+    var blob=new Blob([JSON.stringify({pois:state.pois,border:state.border,roads:state.roads,parking:state.parking},null,1)],{type:'application/json'});
     var a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='pois.json';a.click();setTimeout(function(){URL.revokeObjectURL(a.href)},2000);
     msg('Saved pois.json. Put it next to this page to publish the points.',6000);
   };
   $('bImport').onclick=function(){$('file').click()};
-  $('file').onchange=function(){var f=this.files[0];if(!f)return;var r=new FileReader();r.onload=function(){try{load(JSON.parse(r.result));save();drawBorder(editBorder);render();msg('Imported.',3000)}catch(e){msg('That file is not valid.',5000)}};r.readAsText(f);this.value=''};
+  $('file').onchange=function(){var f=this.files[0];if(!f)return;var r=new FileReader();r.onload=function(){try{load(JSON.parse(r.result));save();drawBorder(editBorder);render();drawRoads();buildGraph();drawParking();msg('Imported.',3000)}catch(e){msg('That file is not valid.',5000)}};r.readAsText(f);this.value=''};
   $('bClear').onclick=function(){if(state.pois.length&&confirm('Delete all '+state.pois.length+' points?')){state.pois=[];setTarget(null);save();render()}};
 }
 
