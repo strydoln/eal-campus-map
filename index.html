@@ -44,8 +44,8 @@ dialog .row{display:flex;gap:8px;margin-top:14px;justify-content:flex-end}
 .bld:before{display:none!important}
 .me{width:18px;height:18px;border-radius:50%;background:#2a8cff;border:3px solid #fff;box-shadow:0 0 0 0 rgba(42,140,255,.6);animation:pulse 2s infinite}
 @keyframes pulse{70%{box-shadow:0 0 0 16px rgba(42,140,255,0)}100%{box-shadow:0 0 0 0 rgba(42,140,255,0)}}
-.vtx{width:14px;height:14px;border-radius:50%;background:#ffd400;border:2px solid #000}
-.mid{width:10px;height:10px;border-radius:50%;background:#fff;border:2px solid #ffd400;opacity:.85}
+.vtx{width:20px;height:20px;border-radius:50%;background:#ffd400;border:2px solid #000}
+.mid{width:22px;height:22px;border-radius:50%;background:rgba(255,255,255,.55);border:3px solid #ffd400;cursor:grab}
 .popup b{font-size:14px}.popup p{margin:4px 0}.popup button{margin:4px 4px 0 0;padding:6px 10px;border-radius:6px;border:1px solid #00b8d4;background:#00b8d4;color:#04202a;font-weight:700;cursor:pointer}
 .popup button.sec{background:#fff;color:#133}
 #printhead{display:none}
@@ -167,13 +167,14 @@ function drawBorder(editing){
   borderPoly=L.polygon(state.border,{color:'#ffd400',weight:3,dashArray:'8 6',fill:false,interactive:false}).addTo(borderLayer);
   if(!editing)return;
   state.border.forEach(function(p,i){
-    var m=L.marker(p,{draggable:true,icon:L.divIcon({className:'',html:'<div class="vtx"></div>',iconSize:[14,14]})}).addTo(editLayer);
+    var m=L.marker(p,{draggable:true,icon:L.divIcon({className:'',html:'<div class="vtx"></div>',iconSize:[20,20],iconAnchor:[10,10]})}).addTo(editLayer);
     m.on('drag',function(){state.border[i]=[m.getLatLng().lat,m.getLatLng().lng];borderPoly.setLatLngs(state.border)});
     m.on('dragend',function(){save();drawBorder(true)});
     m.on('dblclick',function(){if(state.border.length>3){state.border.splice(i,1);save();drawBorder(true)}});
     var q=state.border[(i+1)%state.border.length];
-    var mid=L.marker([(p[0]+q[0])/2,(p[1]+q[1])/2],{icon:L.divIcon({className:'',html:'<div class="mid"></div>',iconSize:[10,10]})}).addTo(editLayer);
-    mid.on('click',function(){state.border.splice(i+1,0,[mid.getLatLng().lat,mid.getLatLng().lng]);save();drawBorder(true)});
+    var mid=L.marker([(p[0]+q[0])/2,(p[1]+q[1])/2],{draggable:true,icon:L.divIcon({className:'',html:'<div class="mid"></div>',iconSize:[22,22],iconAnchor:[11,11]})}).addTo(editLayer);
+    mid.on('drag',function(){var g=mid.getLatLng(),pts=state.border.slice();pts.splice(i+1,0,[g.lat,g.lng]);borderPoly.setLatLngs(pts)});
+    mid.on('dragend',function(){var g=mid.getLatLng();state.border.splice(i+1,0,[g.lat,g.lng]);save();drawBorder(true)});
   });
 }
 
@@ -299,7 +300,7 @@ function boot(){
 if(EDIT){
   $('editBtns').style.display='flex';
   $('bAdd').onclick=function(){setAdding(!adding)};
-  $('bBorder').onclick=function(){editBorder=!editBorder;$('bBorder').classList.toggle('on',editBorder);drawBorder(editBorder);if(editBorder)msg('Drag yellow dots. Tap a white dot to add a corner. Double-tap a yellow dot to remove it.',6000)};
+  $('bBorder').onclick=function(){editBorder=!editBorder;$('bBorder').classList.toggle('on',editBorder);drawBorder(editBorder);if(editBorder)msg('Drag a yellow dot to move a corner. Drag a white dot to add a new corner. Double-tap a yellow dot to remove it.',6000)};
   $('bExport').onclick=function(){
     var blob=new Blob([JSON.stringify({pois:state.pois,border:state.border},null,1)],{type:'application/json'});
     var a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='pois.json';a.click();setTimeout(function(){URL.revokeObjectURL(a.href)},2000);
