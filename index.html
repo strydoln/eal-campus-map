@@ -144,6 +144,11 @@ var BUILDINGS = [{"name":"Artisan Workshop","color":"#00b8d4","polygon":[[-25.98
 var EP = new URLSearchParams(location.search).get('edit'), FULL = EP === '1', POI_ONLY = EP === '2', EDIT = FULL || POI_ONLY;
 var LS = 'eal-visitor-map-v1', LS2 = 'eal-visitor-map-v1-poi', pubBase = '', pubCount = 0, sheetOk = false;
 var SHEET_URL = 'https://script.google.com/macros/s/AKfycbwEge2IJLQ-AYs2snnZ6yy2ZSMHZa1_vEQx-cZhCxu-nW4MsQyVl4k8OwEFts3iatpI/exec';
+function tidyTime(s){
+  s=String(s==null?'':s);
+  var m=s.match(/1899.*?(\d{1,2}):(\d{2})/)||s.match(/^1899-\d\d-\d\dT(\d\d):(\d\d)/);   // Google Sheets turns "09:00" into a 1899 date
+  return m?(m[1].length<2?'0':'')+m[1]+':'+m[2]:s.slice(0,40);
+}
 function applyEventName(){
   var n=state.eventName||'';
   document.querySelector('h1').textContent=n||'EAL CAMPUS MAP';
@@ -697,7 +702,7 @@ function glowRefresh(){glowReady=buildModel();if(glowLayer&&glowOn)glowReady.the
 /* ---- storage ---- */
 function save(){if(!EDIT)return;try{if(POI_ONLY){if(!sheetOk)localStorage.setItem(LS2,JSON.stringify({pois:state.pois,base:pubBase}))}else localStorage.setItem(LS,JSON.stringify({pois:state.pois,border:state.border,roads:state.roads,parking:state.parking}))}catch(e){}}
 function load(d){
-  state.pois=(d&&d.pois||[]).map(function(p){return {id:p.id||0,rid:String(p.rid||''),time:String(p.time||'').slice(0,40),name:String(p.name||''),cat:String(p.cat||'Other'),note:String(p.note||''),lat:+p.lat,lng:+p.lng}}).filter(function(p){return isFinite(p.lat)&&isFinite(p.lng)});
+  state.pois=(d&&d.pois||[]).map(function(p){return {id:p.id||0,rid:String(p.rid||''),time:tidyTime(p.time),name:String(p.name||''),cat:String(p.cat||'Other'),note:String(p.note||''),lat:+p.lat,lng:+p.lng}}).filter(function(p){return isFinite(p.lat)&&isFinite(p.lng)});
   state.pois.forEach(function(p,i){p.id=i+1});nextId=state.pois.length+1;
   state.border=(d&&d.border&&d.border.length>2)?d.border:defaultBorder();
   state.parking=((d&&d.parking)||[]).filter(function(q){return q&&Array.isArray(q.polygon)&&q.polygon.length>2&&q.polygon.every(function(p){return Array.isArray(p)&&isFinite(p[0])&&isFinite(p[1])})}).map(function(q){return {name:String(q.name||'Parking').slice(0,60),polygon:q.polygon.map(function(p){return [+p[0],+p[1]]})}});
