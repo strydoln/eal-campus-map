@@ -71,6 +71,9 @@ body.printing #map{position:fixed;inset:auto;left:0;top:0;width:1047px;height:56
 #rbar{top:112px;left:10px;display:none;gap:6px;flex-wrap:wrap}
 @media(max-width:759px){#rbar{top:150px}}
 .num.p{background:#7986cb;color:#fff}
+.glow{animation:gp 3.2s ease-in-out infinite alternate}
+@keyframes gp{from{opacity:.72}to{opacity:1}}
+@media(prefers-reduced-motion:reduce){.glow{animation:none}}
 </style>
 </head>
 <body>
@@ -86,6 +89,7 @@ body.printing #map{position:fixed;inset:auto;left:0;top:0;width:1047px;height:56
     <button class="btn" id="bBorder">Edit border</button>
     <button class="btn" id="bRoads">Draw roads</button>
     <button class="btn" id="bPark">Draw parking</button>
+    <button class="btn on" id="bGlow">Glow roads</button>
     <button class="btn" id="bExport">Export</button>
     <button class="btn" id="bImport">Import</button>
     <button class="btn" id="bClear">Clear all</button>
@@ -426,6 +430,7 @@ function buildGraph(){
     }
   });
   graph={nodes:nodes,adj:adj,edges:edges};
+  glowRefresh();
 }
 function snapGraph(pt){
   var p=toM(pt),best=null;
@@ -512,6 +517,133 @@ $('rFinish').onclick=function(){parkMode?finishPark():finishLine()};
 $('rUndo').onclick=function(){draft.pop();drawDraft()};
 $('rCancel').onclick=function(){draft=[];drawDraft()};
 
+/* ---- glowing roads: find the road surface (by colour) near the drawn lines ---- */
+var GZ=18,glowLayer=null,glowOn=true,gModels=[],glowReady=Promise.resolve();
+var LATC=Math.cos(-25.985*Math.PI/180);
+function mpp(z){return 156543.03*LATC/Math.pow(2,z)}
+function mercPx(lat,lng,z){var s=256*Math.pow(2,z),sn=Math.sin(lat*Math.PI/180);return [(lng+180)/360*s,(0.5-Math.log((1+sn)/(1-sn))/(4*Math.PI))*s]}
+function boxBlur(src,w,h,r,passes){
+  var a=src,b=new Float32Array(w*h),n=2*r+1,i,x,y,s,p;
+  if(r<1)return src;
+  for(p=0;p<passes;p++){
+    for(y=0;y<h;y++){
+      s=0;for(i=-r;i<=r;i++)s+=a[y*w+Math.min(w-1,Math.max(0,i))];
+      for(x=0;x<w;x++){b[y*w+x]=s/n;s+=a[y*w+Math.min(w-1,x+r+1)]-a[y*w+Math.max(0,x-r)]}
+    }
+    if(a===src)a=new Float32Array(w*h);
+    for(x=0;x<w;x++){
+      s=0;for(i=-r;i<=r;i++)s+=b[Math.min(h-1,Math.max(0,i))*w+x];
+      for(y=0;y<h;y++){a[y*w+x]=s/n;s+=b[Math.min(h-1,y+r+1)*w+x]-b[Math.max(0,y-r)*w+x]}
+    }
+  }
+  return a;
+}
+function strokeRoads(ctx,ox,oy,width,z){
+  ctx.lineJoin='round';ctx.lineCap='round';ctx.lineWidth=width;
+  state.roads.forEach(function(r){
+    ctx.beginPath();
+    r.forEach(function(q,i){var m=mercPx(q[0],q[1],z);if(i)ctx.lineTo(m[0]-ox,m[1]-oy);else ctx.moveTo(m[0]-ox,m[1]-oy)});
+    ctx.stroke();
+  });
+}
+function tileUrl(z,x,y){return 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/'+z+'/'+y+'/'+x}
+function maskCanvas(ox,oy,w,z){var c=document.createElement('canvas');c.width=c.height=256;var x=c.getContext('2d');x.strokeStyle='#fff';strokeRoads(x,ox,oy,w,z);return x.getImageData(0,0,256,256).data}
+function hasAlpha(d,min){for(var i=3;i<d.length;i+=4){if(d[i]>min)return true}return false}
+/* learn the road colours (a few clusters, e.g. grey asphalt, tan gravel) from pixels under the drawn lines */
+function buildModel(){
+  return new Promise(function(resolve){
+    gModels=[];
+    if(!state.roads.length){resolve();return}
+    var xs=[],ys=[];
+    state.roads.forEach(function(r){r.forEach(function(q){var m=mercPx(q[0],q[1],GZ);xs.push(m[0]);ys.push(m[1])})});
+    var x0=Math.floor(Math.min.apply(null,xs)/256),x1=Math.floor(Math.max.apply(null,xs)/256),
+        y0=Math.floor(Math.min.apply(null,ys)/256),y1=Math.floor(Math.max.apply(null,ys)/256),
+        list=[],tx,ty,samples=[],pending=0,failed=0;
+    for(ty=y0;ty<=y1;ty++)for(tx=x0;tx<=x1;tx++){
+      var sd=maskCanvas(tx*256,ty*256,Math.max(3,3/mpp(GZ)),GZ);
+      if(hasAlpha(sd,128))list.push({x:tx,y:ty,sd:sd});
+    }
+    if(!list.length){resolve();return}
+    pending=list.length;
+    function finish(){
+      if(--pending>0)return;
+      if(samples.length>=200){
+        var lum=function(s){return s[0]*.3+s[1]*.59+s[2]*.11};
+        samples.sort(function(a,b){return lum(a)-lum(b)});
+        var cen=[.17,.5,.83].map(function(f){return samples[Math.floor(samples.length*f)].slice()}),it,k;
+        for(it=0;it<12;it++){
+          var sum=cen.map(function(){return [0,0,0,0]});
+          samples.forEach(function(s){var bi=0,bd=1e9;cen.forEach(function(c,ci){var d=Math.hypot(s[0]-c[0],s[1]-c[1],s[2]-c[2]);if(d<bd){bd=d;bi=ci}});var a=sum[bi];a[0]+=s[0];a[1]+=s[1];a[2]+=s[2];a[3]++});
+          sum.forEach(function(a,ci){if(a[3]){cen[ci]=[a[0]/a[3],a[1]/a[3],a[2]/a[3]]}});
+        }
+        var cnt=cen.map(function(){return {n:0,d:0}});
+        samples.forEach(function(s){var bi=0,bd=1e9;cen.forEach(function(c,ci){var d=Math.hypot(s[0]-c[0],s[1]-c[1],s[2]-c[2]);if(d<bd){bd=d;bi=ci}});cnt[bi].n++;cnt[bi].d+=bd});
+        cen.forEach(function(c,ci){if(cnt[ci].n>=samples.length*.12){gModels.push({c:c,T:Math.max(20,Math.min(46,1.8*cnt[ci].d/cnt[ci].n+12))})}});
+      }
+      resolve();
+    }
+    list.forEach(function(t){
+      var im=new Image();im.crossOrigin='anonymous';
+      im.onerror=function(){finish()};
+      im.onload=function(){
+        try{
+          var c=document.createElement('canvas');c.width=c.height=256;var x=c.getContext('2d');x.drawImage(im,0,0);var px=x.getImageData(0,0,256,256).data,k,step=0;
+          for(k=0;k<65536;k++){if(t.sd[k*4+3]>128&&(step++%2===0))samples.push([px[k*4],px[k*4+1],px[k*4+2]])}
+        }catch(e){}
+        finish();
+      };
+      im.src=tileUrl(GZ,t.x,t.y);
+    });
+  });
+}
+var GlowLayer=L.GridLayer.extend({
+  createTile:function(c,done){
+    var tile=document.createElement('canvas');tile.width=tile.height=256;
+    var z=c.z,ox=c.x*256,oy=c.y*256,res=mpp(z);
+    function empty(){setTimeout(function(){done(null,tile)})}
+    if(!state.roads.length){empty();return tile}
+    var corD=maskCanvas(ox,oy,2*4.2/res,z);
+    if(!hasAlpha(corD,40)){empty();return tile}
+    var seedD=maskCanvas(ox,oy,Math.max(2,3/res),z);
+    function fallback(){var g=tile.getContext('2d');g.strokeStyle='rgba(0,229,255,.8)';g.shadowColor='#00e5ff';g.shadowBlur=14;strokeRoads(g,ox,oy,5,z);done(null,tile)}
+    glowReady.then(function(){
+      if(!gModels.length){fallback();return}
+      var im=new Image();im.crossOrigin='anonymous';im.onerror=fallback;
+      im.onload=function(){
+        var W=256,N=W*W,px,k;
+        try{var t2=document.createElement('canvas');t2.width=t2.height=W;var tc=t2.getContext('2d');tc.drawImage(im,0,0);px=tc.getImageData(0,0,W,W).data}catch(e){fallback();return}
+        var mask=new Float32Array(N),mi,m,o;
+        for(k=0;k<N;k++){if(corD[k*4+3]>40){o=k*4;for(mi=0;mi<gModels.length;mi++){m=gModels[mi];if(Math.hypot(px[o]-m.c[0],px[o+1]-m.c[1],px[o+2]-m.c[2])<m.T){mask[k]=1;break}}}}
+        var sm=boxBlur(mask,W,W,Math.max(1,Math.round(1.6/res)),2),bin=new Uint8Array(N);
+        for(k=0;k<N;k++)bin[k]=sm[k]>0.5?1:0;
+        var keep=new Uint8Array(N),qu=new Int32Array(N),qh=0,qt=0;
+        for(k=0;k<N;k++){if(seedD[k*4+3]>128&&bin[k]&&!keep[k]){keep[k]=1;qu[qt++]=k}}
+        while(qh<qt){var u=qu[qh++],ux=u%W,uy=(u/W)|0;
+          if(ux>0&&bin[u-1]&&!keep[u-1]){keep[u-1]=1;qu[qt++]=u-1}
+          if(ux<W-1&&bin[u+1]&&!keep[u+1]){keep[u+1]=1;qu[qt++]=u+1}
+          if(uy>0&&bin[u-W]&&!keep[u-W]){keep[u-W]=1;qu[qt++]=u-W}
+          if(uy<W-1&&bin[u+W]&&!keep[u+W]){keep[u+W]=1;qu[qt++]=u+W}}
+        var A0=new Float32Array(N);for(k=0;k<N;k++)A0[k]=keep[k];
+        var A=boxBlur(A0,W,W,Math.max(1,Math.round(1/res)),2),Gl=boxBlur(A0,W,W,Math.max(2,Math.round(3/res)),3);
+        var ctx=tile.getContext('2d'),img=ctx.createImageData(W,W),d=img.data;
+        for(k=0;k<N;k++){
+          var a=A[k],g=Gl[k],al=Math.min(1,a*.55+g*.5*(1-a*.4)),w2=a*a*a,q=k*4;
+          d[q]=Math.round(190*w2);d[q+1]=Math.round(229+26*w2);d[q+2]=255;d[q+3]=Math.round(al*255);
+        }
+        ctx.putImageData(img,0,0);done(null,tile);
+      };
+      im.src=tileUrl(z,c.x,c.y);
+    });
+    return tile;
+  }
+});
+function makeGlow(){
+  if(glowLayer)return;
+  glowLayer=new GlowLayer({tileSize:256,minNativeZoom:17,maxNativeZoom:19,minZoom:14,maxZoom:20,className:'glow',keepBuffer:1});
+  if(glowOn)glowLayer.addTo(map);
+}
+function glowRefresh(){glowReady=buildModel();if(glowLayer&&glowOn)glowReady.then(function(){glowLayer.redraw()})}
+
 /* ---- storage ---- */
 function save(){if(!EDIT)return;try{localStorage.setItem(LS,JSON.stringify({pois:state.pois,border:state.border,roads:state.roads,parking:state.parking}))}catch(e){}}
 function load(d){
@@ -522,7 +654,7 @@ function load(d){
   state.roads=((d&&d.roads)||[]).filter(function(r){return Array.isArray(r)&&r.length>1&&r.every(function(p){return Array.isArray(p)&&isFinite(p[0])&&isFinite(p[1])})}).map(function(r){return r.map(function(p){return [+p[0],+p[1]]})});
 }
 function init(d){
-  load(d);drawBorder(false);render();drawRoads();buildGraph();drawParking();render();
+  load(d);drawBorder(false);render();drawRoads();buildGraph();drawParking();render();makeGlow();
   fitCampus();setTimeout(function(){map.invalidateSize();fitCampus()},400);
   window.addEventListener('load',function(){map.invalidateSize();fitCampus()});
 }
@@ -543,6 +675,7 @@ if(EDIT){
   $('bAdd').onclick=function(){setAdding(!adding)};
   $('bRoads').onclick=function(){setRoadMode(!roadMode)};
   $('bPark').onclick=function(){setParkMode(!parkMode)};
+  $('bGlow').onclick=function(){glowOn=!glowOn;$('bGlow').classList.toggle('on',glowOn);if(glowLayer){if(glowOn){glowLayer.addTo(map);glowLayer.redraw()}else map.removeLayer(glowLayer)}};
   $('bBorder').onclick=function(){editBorder=!editBorder;$('bBorder').classList.toggle('on',editBorder);drawBorder(editBorder);if(editBorder)msg('Drag a yellow dot to move a corner. Drag a white dot to add a new corner. Double-tap a yellow dot to remove it.',6000)};
   $('bExport').onclick=function(){
     var blob=new Blob([JSON.stringify({pois:state.pois,border:state.border,roads:state.roads,parking:state.parking},null,1)],{type:'application/json'});
