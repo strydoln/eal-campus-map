@@ -85,6 +85,7 @@ body.printing #map{position:fixed;inset:auto;left:0;top:0;width:1047px;height:56
   <button class="btn" id="bFind">&#128205; Find me</button>
   <button class="btn" id="bPrint">&#128196; PDF / Print</button>
   <span id="editBtns" style="display:none;gap:6px;flex-wrap:wrap">
+    <button class="btn" id="bEvent">Event name</button>
     <button class="btn" id="bAdd">+ Add point</button>
     <button class="btn" id="bBorder">Edit border</button>
     <button class="btn" id="bRoads">Draw roads</button>
@@ -121,6 +122,7 @@ body.printing #map{position:fixed;inset:auto;left:0;top:0;width:1047px;height:56
     <label>Name</label><input id="fName" required maxlength="60">
     <label>Category</label>
     <select id="fCat"><option>Reception</option><option>Training room</option><option>Parking</option><option>Toilets</option><option>Food &amp; drink</option><option>Assembly point</option><option>Other</option></select>
+    <label>Time (optional, e.g. 09:00 - 10:30)</label><input id="fTime" maxlength="40">
     <label>Note (optional)</label><textarea id="fNote" rows="2" maxlength="200"></textarea>
     <div class="row"><button type="button" class="btn" id="fCancel">Cancel</button><button class="btn on" id="fOk" value="ok">Save</button></div>
   </form>
@@ -142,20 +144,25 @@ var BUILDINGS = [{"name":"Artisan Workshop","color":"#00b8d4","polygon":[[-25.98
 var EP = new URLSearchParams(location.search).get('edit'), FULL = EP === '1', POI_ONLY = EP === '2', EDIT = FULL || POI_ONLY;
 var LS = 'eal-visitor-map-v1', LS2 = 'eal-visitor-map-v1-poi', pubBase = '', pubCount = 0, sheetOk = false;
 var SHEET_URL = 'https://script.google.com/macros/s/AKfycbwEge2IJLQ-AYs2snnZ6yy2ZSMHZa1_vEQx-cZhCxu-nW4MsQyVl4k8OwEFts3iatpI/exec';
+function applyEventName(){
+  var n=state.eventName||'';
+  document.querySelector('h1').textContent=n||'EAL CAMPUS MAP';
+  document.querySelector('#printhead h2').textContent=(n?n+' \u2014 ':'')+'Campus Map';
+}
 function fetchTimeout(u,ms){var c=new AbortController(),tm=setTimeout(function(){c.abort()},ms);return fetch(u,{signal:c.signal,cache:'no-store'}).then(function(r){clearTimeout(tm);return r})}
 function sheetCall(body){return fetch(SHEET_URL,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify(body)}).then(function(r){return r.json()})}
 function syncPoi(action,p){
   if(!sheetOk){msg('The shared sheet could not be reached, so this is saved on this device only.',6000);return}
   if(action!=='add'&&!p.rid)return;
   msg('Saving...');
-  sheetCall({action:action,rid:p.rid,name:p.name,cat:p.cat,note:p.note,lat:p.lat,lng:p.lng}).then(function(r){
+  sheetCall({action:action,rid:p.rid,name:p.name,cat:p.cat,note:p.note,time:p.time||'',lat:p.lat,lng:p.lng}).then(function(r){
     if(r&&r.ok){if(action==='add'&&r.rid)p.rid=r.rid;msg('Saved.',2000)}
     else msg('Could not save: '+((r&&r.error)||'unknown error'),6000)
   }).catch(function(){msg('Could not reach the shared sheet. Check your connection and try again.',6000)});
 }
-function canEditPoi(p){return FULL||(POI_ONLY&&p.n>pubCount)}
+function canEditPoi(p){return EDIT}
 var $ = function(id){return document.getElementById(id)};
-var state = {pois:[], border:null, roads:[], parking:[]};
+var state = {pois:[], border:null, roads:[], parking:[], eventName:''};
 var nextId = 1;
 
 /* ---- helpers ---- */
@@ -222,7 +229,7 @@ function drawBorder(editing){
 function numIcon(n,sel){return L.divIcon({className:'',html:'<div class="num pin" style="'+(sel?'background:#ffd400;':'')+'">'+n+'</div>',iconSize:[30,30],iconAnchor:[15,15],popupAnchor:[0,-14]})}
 function renumber(){state.pois.forEach(function(p,i){p.n=i+1})}
 function popupHtml(p){
-  var h='<div class="popup"><b>'+p.n+'. '+esc(p.name)+'</b><p>'+esc(p.cat)+(p.note?' &mdash; '+esc(p.note):'')+'</p>'+
+  var h='<div class="popup"><b>'+p.n+'. '+esc(p.name)+'</b><p>'+(p.time?'&#128339; '+esc(p.time)+'<br>':'')+esc(p.cat)+(p.note?' &mdash; '+esc(p.note):'')+'</p>'+
     '<button data-a="go" data-id="'+p.id+'">Navigate here</button>';
   if(canEditPoi(p))h+='<button class="sec" data-a="edit" data-id="'+p.id+'">Edit</button><button class="sec" data-a="del" data-id="'+p.id+'">Delete</button>';
   return h+'</div>';
@@ -237,10 +244,10 @@ function render(){
     m.on('dragend',function(){p.lat=m.getLatLng().lat;p.lng=m.getLatLng().lng;save();syncPoi('update',p)});
     markers[p.id]=m;
     var li=document.createElement('li');if(target&&target.id===p.id)li.className='sel';
-    li.innerHTML='<span class="num">'+p.n+'</span><div><div class="t">'+esc(p.name)+'</div><div class="s">'+esc(p.cat)+(p.note?' &middot; '+esc(p.note):'')+'</div></div>';
+    li.innerHTML='<span class="num">'+p.n+'</span><div><div class="t">'+esc(p.name)+'</div><div class="s">'+(p.time?'&#128339; '+esc(p.time)+' &middot; ':'')+esc(p.cat)+(p.note?' &middot; '+esc(p.note):'')+'</div></div>';
     li.onclick=function(){map.setView([p.lat,p.lng],Math.max(map.getZoom(),18));m.openPopup()};
     ul.appendChild(li);
-    var pi=document.createElement('li');pi.innerHTML='<span class="num">'+p.n+'</span><div><b>'+esc(p.name)+'</b><br>'+esc(p.cat)+(p.note?' &mdash; '+esc(p.note):'')+'</div>';
+    var pi=document.createElement('li');pi.innerHTML='<span class="num">'+p.n+'</span><div><b>'+esc(p.name)+'</b><br>'+(p.time?esc(p.time)+' &mdash; ':'')+esc(p.cat)+(p.note?' &mdash; '+esc(p.note):'')+'</div>';
     pl.appendChild(pi);
   });
   state.parking.forEach(function(pk,i){
@@ -270,17 +277,17 @@ var adding=false,editing=null,pending=null,editBorder=false;
 function openDlg(p,latlng){
   editing=p||null;pending=latlng||null;$('msg').style.display='none';
   $('dlgTitle').textContent=p?'Edit point '+p.n:'New point';
-  $('fName').value=p?p.name:'';$('fCat').value=p?p.cat:'Other';$('fNote').value=p?p.note||'':'';
+  $('fName').value=p?p.name:'';$('fCat').value=p?p.cat:'Other';$('fNote').value=p?p.note||'':'';$('fTime').value=p?p.time||'':'';
   $('dlg').showModal();setTimeout(function(){$('fName').focus()},50);
 }
 $('fCancel').onclick=function(){$('dlg').close();editing=null;pending=null};
 $('dlgForm').addEventListener('submit',function(){
   var name=$('fName').value.trim();if(!name)return;
-  var cat=$('fCat').value,note=$('fNote').value.trim();
+  var cat=$('fCat').value,note=$('fNote').value.trim(),time=$('fTime').value.trim().slice(0,40);
   if(editing){
-    var p=editing;p.name=name;p.cat=cat;p.note=note;editing=null;pending=null;save();render();syncPoi('update',p);
+    var p=editing;p.name=name;p.cat=cat;p.note=note;p.time=time;editing=null;pending=null;save();render();syncPoi('update',p);
   }else if(pending){
-    var np={id:nextId++,rid:'',name:name,cat:cat,note:note,lat:pending.lat,lng:pending.lng};
+    var np={id:nextId++,rid:'',name:name,cat:cat,note:note,time:time,lat:pending.lat,lng:pending.lng};
     pending=null;state.pois.push(np);save();render();syncPoi('add',np);
   }
 });
@@ -690,14 +697,14 @@ function glowRefresh(){glowReady=buildModel();if(glowLayer&&glowOn)glowReady.the
 /* ---- storage ---- */
 function save(){if(!EDIT)return;try{if(POI_ONLY){if(!sheetOk)localStorage.setItem(LS2,JSON.stringify({pois:state.pois,base:pubBase}))}else localStorage.setItem(LS,JSON.stringify({pois:state.pois,border:state.border,roads:state.roads,parking:state.parking}))}catch(e){}}
 function load(d){
-  state.pois=(d&&d.pois||[]).map(function(p){return {id:p.id||0,rid:String(p.rid||''),name:String(p.name||''),cat:String(p.cat||'Other'),note:String(p.note||''),lat:+p.lat,lng:+p.lng}}).filter(function(p){return isFinite(p.lat)&&isFinite(p.lng)});
+  state.pois=(d&&d.pois||[]).map(function(p){return {id:p.id||0,rid:String(p.rid||''),time:String(p.time||'').slice(0,40),name:String(p.name||''),cat:String(p.cat||'Other'),note:String(p.note||''),lat:+p.lat,lng:+p.lng}}).filter(function(p){return isFinite(p.lat)&&isFinite(p.lng)});
   state.pois.forEach(function(p,i){p.id=i+1});nextId=state.pois.length+1;
   state.border=(d&&d.border&&d.border.length>2)?d.border:defaultBorder();
   state.parking=((d&&d.parking)||[]).filter(function(q){return q&&Array.isArray(q.polygon)&&q.polygon.length>2&&q.polygon.every(function(p){return Array.isArray(p)&&isFinite(p[0])&&isFinite(p[1])})}).map(function(q){return {name:String(q.name||'Parking').slice(0,60),polygon:q.polygon.map(function(p){return [+p[0],+p[1]]})}});
   state.roads=((d&&d.roads)||[]).filter(function(r){return Array.isArray(r)&&r.length>1&&r.every(function(p){return Array.isArray(p)&&isFinite(p[0])&&isFinite(p[1])})}).map(function(r){return r.map(function(p){return [+p[0],+p[1]]})});
 }
 function init(d){
-  load(d);drawBorder(false);render();drawRoads();buildGraph();drawParking();render();makeGlow();
+  load(d);drawBorder(false);render();drawRoads();buildGraph();drawParking();render();makeGlow();applyEventName();
   fitCampus();setTimeout(function(){map.invalidateSize();fitCampus()},400);
   window.addEventListener('load',function(){map.invalidateSize();fitCampus()});
 }
@@ -709,9 +716,9 @@ function boot(){
   var local=null;
   if(FULL){try{local=JSON.parse(localStorage.getItem(LS)||'null')}catch(e){}}
   var mapP=fetch('pois.json',{cache:'no-store'}).then(function(r){return r.ok?r.json():null}).catch(function(){return null});
-  var sheetP=SHEET_URL?fetchTimeout(SHEET_URL+'?t='+Date.now(),9000).then(function(r){return r.json()}).then(function(j){return Array.isArray(j.pois)?j.pois:null}).catch(function(){return null}):Promise.resolve(null);
+  var sheetP=SHEET_URL?fetchTimeout(SHEET_URL+'?t='+Date.now(),9000).then(function(r){return r.json()}).then(function(j){return Array.isArray(j.pois)?j:null}).catch(function(){return null}):Promise.resolve(null);
   Promise.all([mapP,sheetP]).then(function(a){
-    var d=a[0]||{},sp=a[1];
+    var d=a[0]||{},sj=a[1],sp=sj?sj.pois:null;
     sheetOk=!!sp;
     var published=(d.pois||[]);
     if(FULL&&local){d={border:local.border,roads:local.roads,parking:local.parking,pois:published}}
@@ -721,6 +728,7 @@ function boot(){
       pubBase=JSON.stringify(published);
       try{var lp=JSON.parse(localStorage.getItem(LS2)||'null');if(lp&&Array.isArray(lp.pois)&&lp.base===pubBase)d.pois=lp.pois}catch(e){}
     }
+    state.eventName=String((sj&&sj.settings&&sj.settings.eventName)||d.eventName||'').slice(0,80);
     pubCount=sp?sp.length:published.length;
     if(!sp&&SHEET_URL)setTimeout(function(){msg('Showing the saved copy of the points (the shared sheet is not reachable right now).',7000)},600);
     init(d);
@@ -732,13 +740,20 @@ function boot(){
 if(EDIT){
   $('editBtns').style.display='flex';
   $('bAdd').onclick=function(){setAdding(!adding)};
+  $('bEvent').onclick=function(){
+    var v=prompt('Event name (shown at the top for all visitors)',state.eventName||'');if(v===null)return;
+    state.eventName=v.trim().slice(0,80);applyEventName();
+    if(!sheetOk){msg('Saved on this device only (the shared sheet is not reachable).',5000);return}
+    msg('Saving...');
+    sheetCall({action:'setting',key:'eventName',value:state.eventName}).then(function(r){msg(r&&r.ok?'Saved.':'Could not save: '+((r&&r.error)||'update the sheet script first'),r&&r.ok?2000:7000)}).catch(function(){msg('Could not reach the shared sheet.',6000)});
+  };
   $('bRoads').onclick=function(){setRoadMode(!roadMode)};
-  if(POI_ONLY){['bBorder','bRoads','bPark','bGlow','bImport','bClear'].forEach(function(id){$(id).style.display='none'});document.querySelector('h1').textContent='EAL CAMPUS MAP \u00b7 POINTS'}
+  if(POI_ONLY){['bBorder','bRoads','bPark','bGlow','bImport','bClear'].forEach(function(id){$(id).style.display='none'})}
   $('bPark').onclick=function(){setParkMode(!parkMode)};
   $('bGlow').onclick=function(){glowOn=!glowOn;$('bGlow').classList.toggle('on',glowOn);if(glowLayer){if(glowOn){glowLayer.addTo(map);glowLayer.redraw()}else map.removeLayer(glowLayer)}};
   $('bBorder').onclick=function(){editBorder=!editBorder;$('bBorder').classList.toggle('on',editBorder);drawBorder(editBorder);if(editBorder)msg('Drag a yellow dot to move a corner. Drag a white dot to add a new corner. Double-tap a yellow dot to remove it.',6000)};
   $('bExport').onclick=function(){
-    var blob=new Blob([JSON.stringify({pois:state.pois.map(function(p){return {id:p.id,name:p.name,cat:p.cat,note:p.note,lat:p.lat,lng:p.lng,n:p.n}}),border:state.border,roads:state.roads,parking:state.parking},null,1)],{type:'application/json'});
+    var blob=new Blob([JSON.stringify({pois:state.pois.map(function(p){return {id:p.id,name:p.name,cat:p.cat,note:p.note,time:p.time||'',lat:p.lat,lng:p.lng,n:p.n}}),border:state.border,roads:state.roads,parking:state.parking,eventName:state.eventName},null,1)],{type:'application/json'});
     var a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='pois.json';a.click();setTimeout(function(){URL.revokeObjectURL(a.href)},2000);
     msg('Saved pois.json. Put it next to this page to publish the points.',6000);
   };
