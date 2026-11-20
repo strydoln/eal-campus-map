@@ -547,7 +547,7 @@ function strokeRoads(ctx,ox,oy,width,z){
   });
 }
 function tileUrl(z,x,y){return 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/'+z+'/'+y+'/'+x}
-function maskCanvas(ox,oy,w,z){var c=document.createElement('canvas');c.width=c.height=256;var x=c.getContext('2d');x.strokeStyle='#fff';strokeRoads(x,ox,oy,w,z);return x.getImageData(0,0,256,256).data}
+function maskCanvas(ox,oy,w,z,S){S=S||256;var c=document.createElement('canvas');c.width=c.height=S;var x=c.getContext('2d');x.strokeStyle='#fff';strokeRoads(x,ox,oy,w,z);return x.getImageData(0,0,S,S).data}
 function hasAlpha(d,min){for(var i=3;i<d.length;i+=4){if(d[i]>min)return true}return false}
 /* learn the road colours (a few clusters, e.g. grey asphalt, tan gravel) from pixels under the drawn lines */
 function buildModel(){
@@ -596,25 +596,36 @@ function buildModel(){
     });
   });
 }
+var imgCache={};
+function getImg(z,x,y){
+  var k=z+'/'+x+'/'+y;
+  if(!imgCache[k])imgCache[k]=new Promise(function(res){var im=new Image();im.crossOrigin='anonymous';im.onload=function(){res(im)};im.onerror=function(){res(null)};im.src=tileUrl(z,x,y)});
+  return imgCache[k];
+}
+function sstep(a,lo,hi){if(a<=lo)return 0;if(a>=hi)return 1;var u=(a-lo)/(hi-lo);return u*u*(3-2*u)}
 var GlowLayer=L.GridLayer.extend({
   createTile:function(c,done){
-    var tile=document.createElement('canvas');tile.width=tile.height=256;
-    var z=c.z,ox=c.x*256,oy=c.y*256,res=mpp(z);
-    function empty(){setTimeout(function(){done(null,tile)})}
+    // each tile is computed on a padded 3x3 mosaic so roads, edges and glow carry across tile borders
+    var P=48,S=256+2*P,z=c.z,ox=c.x*256-P,oy=c.y*256-P,res=mpp(z),tile=document.createElement('canvas');
+    function empty(){tile.width=tile.height=1;setTimeout(function(){done(null,tile)})}
     if(!state.roads.length){empty();return tile}
-    var corD=maskCanvas(ox,oy,2*4.2/res,z);
+    var corD=maskCanvas(ox,oy,2*4.2/res,z,S);
     if(!hasAlpha(corD,40)){empty();return tile}
-    var seedD=maskCanvas(ox,oy,Math.max(2,3/res),z);
-    function fallback(){var g=tile.getContext('2d');g.strokeStyle='rgba(0,229,255,.8)';g.shadowColor='#00e5ff';g.shadowBlur=14;strokeRoads(g,ox,oy,5,z);done(null,tile)}
+    tile.width=tile.height=256;
+    var seedD=maskCanvas(ox,oy,Math.max(2,3/res),z,S);
+    function fallback(){var g=tile.getContext('2d');g.strokeStyle='rgba(0,196,224,.7)';g.shadowColor='#00c4e0';g.shadowBlur=10;strokeRoads(g,c.x*256,c.y*256,4,z);done(null,tile)}
     glowReady.then(function(){
       if(!gModels.length){fallback();return}
-      var im=new Image();im.crossOrigin='anonymous';im.onerror=fallback;
-      im.onload=function(){
-        var W=256,N=W*W,px,k;
-        try{var t2=document.createElement('canvas');t2.width=t2.height=W;var tc=t2.getContext('2d');tc.drawImage(im,0,0);px=tc.getImageData(0,0,W,W).data}catch(e){fallback();return}
-        var mask=new Float32Array(N),mi,m,o;
+      var jobs=[],dx,dy;
+      for(dy=-1;dy<=1;dy++)for(dx=-1;dx<=1;dx++)jobs.push(getImg(z,c.x+dx,c.y+dy));
+      Promise.all(jobs).then(function(ims){
+        if(!ims[4]){fallback();return}
+        var big=document.createElement('canvas');big.width=big.height=S;var bx=big.getContext('2d'),px,k;
+        ims.forEach(function(im,i){if(im)bx.drawImage(im,P+(i%3-1)*256,P+(((i/3)|0)-1)*256)});
+        try{px=bx.getImageData(0,0,S,S).data}catch(e){fallback();return}
+        var N=S*S,W=S,mask=new Float32Array(N),mi,m,o;
         for(k=0;k<N;k++){if(corD[k*4+3]>40){o=k*4;for(mi=0;mi<gModels.length;mi++){m=gModels[mi];if(Math.hypot(px[o]-m.c[0],px[o+1]-m.c[1],px[o+2]-m.c[2])<m.T){mask[k]=1;break}}}}
-        var sm=boxBlur(mask,W,W,Math.max(1,Math.round(1.6/res)),2),bin=new Uint8Array(N);
+        var sm=boxBlur(mask,W,W,Math.max(1,Math.round(1.1/res)),2),bin=new Uint8Array(N);
         for(k=0;k<N;k++)bin[k]=sm[k]>0.5?1:0;
         var keep=new Uint8Array(N),qu=new Int32Array(N),qh=0,qt=0;
         for(k=0;k<N;k++){if(seedD[k*4+3]>128&&bin[k]&&!keep[k]){keep[k]=1;qu[qt++]=k}}
@@ -624,22 +635,21 @@ var GlowLayer=L.GridLayer.extend({
           if(uy>0&&bin[u-W]&&!keep[u-W]){keep[u-W]=1;qu[qt++]=u-W}
           if(uy<W-1&&bin[u+W]&&!keep[u+W]){keep[u+W]=1;qu[qt++]=u+W}}
         var A0=new Float32Array(N);for(k=0;k<N;k++)A0[k]=keep[k];
-        var A=boxBlur(A0,W,W,Math.max(1,Math.round(1/res)),2),Gl=boxBlur(A0,W,W,Math.max(2,Math.round(3/res)),3);
+        var A=boxBlur(A0,W,W,Math.max(1,Math.round(.6/res)),2),Gl=boxBlur(A0,W,W,Math.max(2,Math.round(2/res)),2);
         var ctx=tile.getContext('2d'),img=ctx.createImageData(W,W),d=img.data;
         for(k=0;k<N;k++){
-          var a=A[k],g=Gl[k],al=Math.min(1,a*.55+g*.5*(1-a*.4)),w2=a*a*a,q=k*4;
-          d[q]=Math.round(190*w2);d[q+1]=Math.round(229+26*w2);d[q+2]=255;d[q+3]=Math.round(al*255);
+          var a=sstep(A[k],.3,.7),g=Gl[k],al=Math.min(1,a*.46+g*.34*(1-a*.5)),q=k*4;
+          d[q]=Math.round(10+110*a*a);d[q+1]=Math.round(190+35*a*a);d[q+2]=Math.round(220+25*a*a);d[q+3]=Math.round(al*255);
         }
-        ctx.putImageData(img,0,0);done(null,tile);
-      };
-      im.src=tileUrl(z,c.x,c.y);
+        ctx.putImageData(img,-P,-P,P,P,256,256);done(null,tile);
+      });
     });
     return tile;
   }
 });
 function makeGlow(){
   if(glowLayer)return;
-  glowLayer=new GlowLayer({tileSize:256,minNativeZoom:17,maxNativeZoom:19,minZoom:14,maxZoom:20,className:'glow',keepBuffer:1});
+  glowLayer=new GlowLayer({tileSize:256,minNativeZoom:18,maxNativeZoom:19,minZoom:14,maxZoom:20,className:'glow',keepBuffer:1});
   if(glowOn)glowLayer.addTo(map);
 }
 function glowRefresh(){glowReady=buildModel();if(glowLayer&&glowOn)glowReady.then(function(){glowLayer.redraw()})}
